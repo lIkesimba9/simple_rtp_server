@@ -4,30 +4,27 @@
 #include <gst/rtp/rtp.h>
 
 using namespace std;
-/*gst-launch-1.0
- * v4l2src !
- * videoconvert !
- * video/x-raw,framerate=30/1,format=I420
- * ! x264enc tune=zerolatency  byte-stream=true bitrate=1500 threads=2
- * ! rtph264pay pt=96 - default value
- * ! .send_rtp_sink rtpsession .send_rtp_src !
- * udpsink host=127.0.0.1 port=5000 -v
-*/
-/*PEER_V=9004 PEER_IP=127.0.0.1 \
- *SELF_PATH="video.mp4" \
- *SELF_V=5004 SELF_VSSRC=112233 \
- *bash -c 'gst-launch-1.0 -e \
- *rtpsession name=r sdes="application/x-rtp-source-sdes,cname=(string)\"user\@example.com\"" \
- *v4l2src ! videoconvert ! video/x-raw,framerate=30/1,format=I420 \
- *! x264enc tune=zerolatency \
- *! rtph264pay ! "application/x-rtp,payload=(int)103,clock-rate=(int)90000,ssrc=(uint)$SELF_VSSRC" \
- *! r.send_rtp_sink \
- *r.send_rtp_src ! udpsink host=$PEER_IP port=$PEER_V \
- *r.send_rtcp_src ! udpsink host=$PEER_IP port=$((PEER_V+1)) sync=false async=false \
- *udpsrc port=$((SELF_V+1)) ! tee name=t \
- *t. ! queue ! r.recv_rtcp_sink \
- *t. ! queue ! fakesink dump=true async=false'
-*/
+
+/*
+ * Sender example setup
+ * sends the output of v4l2src as h264 encoded RTP on port 5000, RTCP is sent on
+ * port 5001. The destination is 127.0.0.1.
+ * the video receiver RTCP reports are received on port 5005
+ *
+ * .-------.    .-------.    .-------.      .----------.     .-------.
+ * |v4l2   |    |x264enc|    |h264pay|      | rtpbin   |     |udpsink|  RTP
+ * |      src->sink    src->sink    src->send_rtp send_rtp->sink     | port=5000
+ * '-------'    '-------'    '-------'      |          |     '-------'
+ *                                          |          |
+ *                                          |          |     .-------.
+ *                                          |          |     |udpsink|  RTCP
+ *                                          |    send_rtcp->sink     | port=5001
+ *              .-------.    .--------.     |          |     '-------' sync=false
+ *    RTCP      |udpsrc |    |identity|     |          |               async=false
+ *    port=5005 |      src->sink     src->recv_rtcp    |
+ *              '-------'    '--------'     '----------'
+ */
+
 
 void OnPadAdded(GstElement *element, GstPad *pad, gpointer data) {
     GstPad *sinkpad;
@@ -110,9 +107,9 @@ process_rtcp_packet(GstRTCPPacket *packet){
         cerr << "    lsr " << lsr;
         cerr << "    dlsr " << dlsr;
 
-//        rtcp_pkt->fractionlost = fractionlost;
-//        rtcp_pkt->jitter = jitter;
-//        rtcp_pkt->packetslost = packetslost;
+        //        rtcp_pkt->fractionlost = fractionlost;
+        //        rtcp_pkt->jitter = jitter;
+        //        rtcp_pkt->packetslost = packetslost;
     }
 
     //cerr << "Received rtcp packet");
@@ -124,8 +121,8 @@ process_rtcp_packet(GstRTCPPacket *packet){
 static gboolean cb_receive_rtcp(GstElement *rtpsession, GstBuffer *buf, gpointer data){
 
     GstRTCPBuffer rtcpBuffer = GST_RTCP_BUFFER_INIT;
-//    GstRTCPBuffer *rtcpBuffer = (GstRTCPBuffer*)malloc(sizeof(GstRTCPBuffer));
-//    rtcpBuffer->buffer = nullptr;
+    //    GstRTCPBuffer *rtcpBuffer = (GstRTCPBuffer*)malloc(sizeof(GstRTCPBuffer));
+    //    rtcpBuffer->buffer = nullptr;
     GstRTCPPacket *rtcpPacket = (GstRTCPPacket*)malloc(sizeof(GstRTCPPacket));
 
 
@@ -134,7 +131,7 @@ static gboolean cb_receive_rtcp(GstElement *rtpsession, GstBuffer *buf, gpointer
         cerr << "Received invalid RTCP packet" << endl;
     }
 
-   cerr << "Received rtcp packet" << "\n";
+    cerr << "Received rtcp packet" << "\n";
 
 
     gst_rtcp_buffer_map (buf,(GstMapFlags)(GST_MAP_READ),&rtcpBuffer);
@@ -146,7 +143,7 @@ static gboolean cb_receive_rtcp(GstElement *rtpsession, GstBuffer *buf, gpointer
         switch (type) {
         case GST_RTCP_TYPE_RR:
             process_rtcp_packet(rtcpPacket);
-        //   gst_rtcp_buffer_unmap (&rtcpBuffer);
+            //   gst_rtcp_buffer_unmap (&rtcpBuffer);
             //g_debug("RR");
             //send_event_to_encoder(venc, &rtcp_pkt);
             break;
@@ -160,6 +157,37 @@ static gboolean cb_receive_rtcp(GstElement *rtpsession, GstBuffer *buf, gpointer
     free(rtcpPacket);
     return TRUE;
 }
+bool linkStaticAndRequestPad(GstElement *sourse,GstElement *sink,gchar *nameSrcPad,gchar *nameSinkPad)
+{
+
+    GstPad *srcPad = gst_element_get_static_pad(sourse,nameSrcPad);
+    GstPad *sinkPad = gst_element_get_request_pad(sink,nameSinkPad);
+    GstPadLinkReturn ret_link = gst_pad_link(srcPad,sinkPad);
+    if (ret_link != GST_PAD_LINK_OK)
+    {
+        cerr << "Error create link, beetwen recvRtpSinkPad and udpSrcRtpPad\n";
+        return false;
+    }
+    gst_object_unref(GST_OBJECT(srcPad));
+    gst_object_unref(GST_OBJECT(sinkPad));
+    return true;
+}
+bool linkRequestAndStatic(GstElement *sourse,GstElement *sink,gchar *nameSrcPad,gchar *nameSinkPad)
+{
+
+    GstPad *srcPad = gst_element_get_request_pad(sourse,nameSrcPad);
+    GstPad *sinkPad = gst_element_get_static_pad(sink,nameSinkPad);
+    GstPadLinkReturn ret_link = gst_pad_link(srcPad,sinkPad);
+    if (ret_link != GST_PAD_LINK_OK)
+    {
+        cerr << "Error create link, beetwen recvRtpSinkPad and udpSrcRtpPad\n";
+        return false;
+    }
+    gst_object_unref(GST_OBJECT(srcPad));
+    gst_object_unref(GST_OBJECT(sinkPad));
+    return true;
+}
+
 
 GstElement *create_pipeline(){
     GstElement *pipeline,*source,*videconverter,
@@ -195,7 +223,7 @@ GstElement *create_pipeline(){
     g_object_set(G_OBJECT(source),"device","/dev/video0",NULL);
     // Устанавливаю параметры кодека.
     g_object_set(G_OBJECT(x264encoder),"tune",0x00000004,NULL);
-    g_object_set(G_OBJECT(x264encoder),"bitrate",1500,NULL);
+    g_object_set(G_OBJECT(x264encoder),"bitrate",500,NULL);
     //   g_object_set(G_OBJECT(x264encoder),"threads",2,NULL);
 
     // Устанавливаю параметры для upd сойденений.
@@ -237,7 +265,7 @@ GstElement *create_pipeline(){
     }
 
 
-// Связваю все элементы до кодировщика.
+    // Связваю все элементы.
     if (!gst_element_link_filtered(source,videconverter,capV4l2VideoConverter))
     {
         cerr << "Elements could not be linked source and videoconv.\n";
@@ -258,53 +286,37 @@ GstElement *create_pipeline(){
         return NULL;
 
     }
-    GstPad *sendRtpSinkPad = gst_element_get_request_pad(rtpbin,"send_rtp_sink_%u");
-    GstPad *rtpPaySrcPad = gst_element_get_static_pad(rtph264pay,"src");
-    GstPadLinkReturn ret_link = gst_pad_link(rtpPaySrcPad,sendRtpSinkPad);
-    if (ret_link != GST_PAD_LINK_OK)
+
+    if (!linkStaticAndRequestPad(rtph264pay,rtpbin,"src","send_rtp_sink_%u"))
     {
-        cerr << "Error create link, beetwen sendRtpSinkPad and rtpPaySrcPad\n";
+        cerr << "Error create link, beetwen rtph264pay and rtpbin\n";
         return NULL;
     }
-    gst_object_unref(GST_OBJECT(sendRtpSinkPad));
-    gst_object_unref(GST_OBJECT(rtpPaySrcPad));
 
     if (!gst_element_link(rtpbin,udpSinkRtp))
     {
         cerr << "Elements could not be linked rtpbin and udpSinkRtp.\n";
     }
 
-
-    GstPad *sendRtcpSrcPad = gst_element_get_request_pad(rtpbin,"send_rtcp_src_%u");
-    GstPad *udpSinkPad = gst_element_get_static_pad(udpSinkRtcp,"sink");
-    ret_link = gst_pad_link(sendRtcpSrcPad, udpSinkPad);
-    if (ret_link != GST_PAD_LINK_OK)
+    if (!linkRequestAndStatic(rtpbin,udpSinkRtcp,"send_rtcp_src_%u","sink"))
     {
-        cerr << "Error create link, beetwen sendRtcpSrcPad and udpSinkPad\n";
-        return NULL;
-    }
-    gst_object_unref(GST_OBJECT(sendRtcpSrcPad));
-    gst_object_unref(GST_OBJECT(udpSinkPad));
-
-    GstPad *recvRtcpSinkPad = gst_element_get_request_pad(rtpbin,"recv_rtcp_sink_%u");
-    GstPad *udpSrcPad = gst_element_get_static_pad(udpSrcRtcp,"src");
-    ret_link = gst_pad_link(udpSrcPad, recvRtcpSinkPad);
-    if (ret_link != GST_PAD_LINK_OK)
-    {
-        cerr << "Error create link, beetwen udpSrcPad and recvRtcpSinkPad\n";
+        cerr << "Error create link, beetwen rtpbin and udpSinkRtcp\n";
         return NULL;
     }
 
-    gst_object_unref(GST_OBJECT(recvRtcpSinkPad));
-    gst_object_unref(GST_OBJECT(udpSrcPad));
 
-      GObject *session;
+    if (!linkStaticAndRequestPad(udpSrcRtcp,rtpbin,"src","recv_rtcp_sink_%u"))
+    {
+        cerr << "Error create link, beetwen udpSrcRtcp and rtpbin\n";
+        return NULL;
+    }
 
-
-      g_signal_emit_by_name (rtpbin, "get-internal-session", 0, &session);
-      g_signal_connect_after (session, "on-receiving-rtcp",
-                               G_CALLBACK (cb_receive_rtcp), NULL);
-     // g_object_unref(session);
+    // Подключаю сигнал по обработке принятых rtcp пакетов.
+    GObject *session;
+    g_signal_emit_by_name (rtpbin, "get-internal-session", 0, &session);
+    g_signal_connect_after (session, "on-receiving-rtcp",
+                           G_CALLBACK (cb_receive_rtcp), NULL);
+    // g_object_unref(session);
 
     return pipeline;
 
