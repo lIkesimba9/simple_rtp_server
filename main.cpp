@@ -19,10 +19,10 @@ using namespace std;
  *                                          |          |     .-------.
  *                                          |          |     |udpsink|  RTCP
  *                                          |    send_rtcp->sink     | port=5001
- *              .-------.    .--------.     |          |     '-------' sync=false
- *    RTCP      |udpsrc |    |identity|     |          |               async=false
- *    port=5005 |      src->sink     src->recv_rtcp    |
- *              '-------'    '--------'     '----------'
+ *                           .--------.     |          |     '-------' sync=false
+ *                RTCP       |udpsrc  |     |          |               async=false
+ *                port=5005  |       src->recv_rtcp    |
+ *                           '--------'     '----------'
  */
 
 
@@ -65,8 +65,7 @@ static gboolean bus_call (GstBus     *bus,
 
 
 static gboolean process_rtcp_packet(GstRTCPPacket *packet){
-    guint32 ssrc, rtptime, packet_count, octet_count;
-    guint64 ntptime;
+    guint32 ssrc;
     guint count, i;
 
     count = gst_rtcp_packet_get_rb_count(packet);
@@ -146,7 +145,7 @@ bool linkStaticAndRequestPads(GstElement *sourse,GstElement *sink,gchar *nameSrc
     GstPadLinkReturn ret_link = gst_pad_link(srcPad,sinkPad);
     if (ret_link != GST_PAD_LINK_OK)
     {
-        cerr << "Error create link, beetwen recvRtpSinkPad and udpSrcRtpPad\n";
+        cerr << "Error create link, static and request pad\n";
         return false;
     }
     gst_object_unref(GST_OBJECT(srcPad));
@@ -162,7 +161,7 @@ bool linkRequestAndStaticPads(GstElement *sourse,GstElement *sink,gchar *nameSrc
     GstPadLinkReturn ret_link = gst_pad_link(srcPad,sinkPad);
     if (ret_link != GST_PAD_LINK_OK)
     {
-        cerr << "Error create link, beetwen recvRtpSinkPad and udpSrcRtpPad\n";
+        cerr << "Error create link, request and statitc pad\n";
         return false;
     }
     gst_object_unref(GST_OBJECT(srcPad));
