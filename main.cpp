@@ -2,7 +2,7 @@
 #include <gst/gst.h>
 
 #include <gst/rtp/rtp.h>
-
+#include <time.h>
 using namespace std;
 
 /*
@@ -26,25 +26,7 @@ using namespace std;
  */
 
 
-void OnPadAdded(GstElement *element, GstPad *pad, gpointer data) {
-    GstPad *sinkpad;
-    //узнаю навания элементов котоыре передаются.
-    gchar *name = gst_element_get_name(element);
-    g_print("Element name is %s\n",name);
-    gchar *pad_name = GST_PAD_NAME(pad);
-    g_print("Element pad is %s\n",pad_name);
-    //узнаю навания элементов котоыре передаются.
-    GstElement *udpsink = (GstElement *) data;
-    gchar *name_decoder = gst_element_get_name(udpsink);
-    g_print("Element name is %s\n",name_decoder);
 
-
-    sinkpad = gst_element_get_static_pad(udpsink, "sink");
-
-    GstPadLinkReturn ret = gst_pad_link(pad, sinkpad);
-
-    gst_object_unref(sinkpad);
-}
 
 static gboolean bus_call (GstBus     *bus,
                          GstMessage *msg,
@@ -82,8 +64,7 @@ static gboolean bus_call (GstBus     *bus,
 }
 
 
-static gboolean
-process_rtcp_packet(GstRTCPPacket *packet){
+static gboolean process_rtcp_packet(GstRTCPPacket *packet){
     guint32 ssrc, rtptime, packet_count, octet_count;
     guint64 ntptime;
     guint count, i;
@@ -157,7 +138,7 @@ static gboolean cb_receive_rtcp(GstElement *rtpsession, GstBuffer *buf, gpointer
     free(rtcpPacket);
     return TRUE;
 }
-bool linkStaticAndRequestPad(GstElement *sourse,GstElement *sink,gchar *nameSrcPad,gchar *nameSinkPad)
+bool linkStaticAndRequestPads(GstElement *sourse,GstElement *sink,gchar *nameSrcPad,gchar *nameSinkPad)
 {
 
     GstPad *srcPad = gst_element_get_static_pad(sourse,nameSrcPad);
@@ -172,8 +153,9 @@ bool linkStaticAndRequestPad(GstElement *sourse,GstElement *sink,gchar *nameSrcP
     gst_object_unref(GST_OBJECT(sinkPad));
     return true;
 }
-bool linkRequestAndStatic(GstElement *sourse,GstElement *sink,gchar *nameSrcPad,gchar *nameSinkPad)
+bool linkRequestAndStaticPads(GstElement *sourse,GstElement *sink,gchar *nameSrcPad,gchar *nameSinkPad)
 {
+
 
     GstPad *srcPad = gst_element_get_request_pad(sourse,nameSrcPad);
     GstPad *sinkPad = gst_element_get_static_pad(sink,nameSinkPad);
@@ -187,6 +169,35 @@ bool linkRequestAndStatic(GstElement *sourse,GstElement *sink,gchar *nameSrcPad,
     gst_object_unref(GST_OBJECT(sinkPad));
     return true;
 }
+
+static GstPadProbeReturn cb_add_time_to_rtp_packet(GstPad *pad, GstPadProbeInfo *info, gpointer *data) {
+
+    GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER(info);
+    GstRTPBuffer rtp_buffer;
+    memset(&rtp_buffer, 0, sizeof(GstRTPBuffer));
+
+    if (buffer != NULL) {
+        struct timespec ts;
+        timespec_get(&ts, TIME_UTC);
+        gconstpointer nsec = &ts.tv_nsec;
+        gconstpointer sec = &ts.tv_sec;
+        if (gst_rtp_buffer_map(buffer, (GstMapFlags)GST_MAP_READWRITE, &rtp_buffer)) {
+            //gst_rtp_buffer_add_extension_onebyte_header()
+
+            gst_rtp_buffer_add_extension_twobytes_header(&rtp_buffer, 0, 1, nsec, sizeof(ts.tv_nsec));
+            gst_rtp_buffer_add_extension_twobytes_header(&rtp_buffer, 0, 2, sec, sizeof(ts.tv_sec));
+            std::cout << "sec: " << ts.tv_sec << " " << "nanosec: " << ts.tv_nsec <<  std::endl;
+        }
+        else {
+            cerr << "RTP buffer not mapped\n";
+        }
+    }
+    else {
+        cerr << "Gst buffer is NULL\n";
+    }
+    gst_rtp_buffer_unmap(&rtp_buffer);
+}
+
 
 
 GstElement *create_pipeline(){
@@ -237,6 +248,8 @@ GstElement *create_pipeline(){
 
     g_object_set(G_OBJECT(udpSrcRtcp),"address","127.0.0.1",NULL);
     g_object_set(G_OBJECT(udpSrcRtcp),"port",5005,NULL);
+    g_object_set(G_OBJECT (udpSrcRtcp), "caps", gst_caps_from_string("application/x-rtcp"), NULL);
+
 
     // Добавляю элементы в контейнер
     gst_bin_add_many(GST_BIN(pipeline),source,videconverter,
@@ -287,7 +300,7 @@ GstElement *create_pipeline(){
 
     }
 
-    if (!linkStaticAndRequestPad(rtph264pay,rtpbin,"src","send_rtp_sink_%u"))
+    if (!linkStaticAndRequestPads(rtph264pay,rtpbin,"src","send_rtp_sink_%u"))
     {
         cerr << "Error create link, beetwen rtph264pay and rtpbin\n";
         return NULL;
@@ -298,39 +311,42 @@ GstElement *create_pipeline(){
         cerr << "Elements could not be linked rtpbin and udpSinkRtp.\n";
     }
 
-    if (!linkRequestAndStatic(rtpbin,udpSinkRtcp,"send_rtcp_src_%u","sink"))
+    if (!linkRequestAndStaticPads(rtpbin,udpSinkRtcp,"send_rtcp_src_%u","sink"))
     {
         cerr << "Error create link, beetwen rtpbin and udpSinkRtcp\n";
         return NULL;
     }
 
 
-    if (!linkStaticAndRequestPad(udpSrcRtcp,rtpbin,"src","recv_rtcp_sink_%u"))
+    if (!linkStaticAndRequestPads(udpSrcRtcp,rtpbin,"src","recv_rtcp_sink_%u"))
     {
         cerr << "Error create link, beetwen udpSrcRtcp and rtpbin\n";
         return NULL;
     }
+    //Пад для расширения заголовка RTP.
+    GstPad *rtpPaySrcPad = gst_element_get_static_pad(rtph264pay, "src");
+    gst_pad_add_probe(rtpPaySrcPad, GST_PAD_PROBE_TYPE_BUFFER, (GstPadProbeCallback)cb_add_time_to_rtp_packet, NULL, NULL);
+    gst_object_unref(GST_OBJECT(rtpPaySrcPad));
 
     // Подключаю сигнал по обработке принятых rtcp пакетов.
     GObject *session;
     g_signal_emit_by_name (rtpbin, "get-internal-session", 0, &session);
     g_signal_connect_after (session, "on-receiving-rtcp",
                            G_CALLBACK (cb_receive_rtcp), NULL);
-    // g_object_unref(session);
+    g_object_unref(session);
+
+
+
 
     return pipeline;
 
 }
 
 
-int main()
+int main(int argc, char *argv[])
 {
 
-
-
     gst_init(0,0);
-
-
 
     GMainLoop *loop;
     loop = g_main_loop_new(NULL,FALSE);
