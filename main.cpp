@@ -2,7 +2,8 @@
 #include <gst/gst.h>
 
 #include <gst/rtp/rtp.h>
-#include <time.h>
+//#include <time.h>
+#include <chrono>
 using namespace std;
 
 /*
@@ -176,16 +177,14 @@ static GstPadProbeReturn cb_add_time_to_rtp_packet(GstPad *pad, GstPadProbeInfo 
     memset(&rtp_buffer, 0, sizeof(GstRTPBuffer));
 
     if (buffer != NULL) {
-        struct timespec ts;
-        timespec_get(&ts, TIME_UTC);
-        gconstpointer nsec = &ts.tv_nsec;
-        gconstpointer sec = &ts.tv_sec;
+        // Замеряю время. И отправляю его.
+        std::chrono::time_point<std::chrono::system_clock> now = std::chrono::system_clock::now();
+        auto duration = now.time_since_epoch();
+        auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+        gconstpointer pointMilisec = &millis;
         if (gst_rtp_buffer_map(buffer, (GstMapFlags)GST_MAP_READWRITE, &rtp_buffer)) {
-            //gst_rtp_buffer_add_extension_onebyte_header()
-
-            gst_rtp_buffer_add_extension_twobytes_header(&rtp_buffer, 0, 1, nsec, sizeof(ts.tv_nsec));
-            gst_rtp_buffer_add_extension_twobytes_header(&rtp_buffer, 0, 2, sec, sizeof(ts.tv_sec));
-            std::cout << "sec: " << ts.tv_sec << " " << "nanosec: " << ts.tv_nsec <<  std::endl;
+            gst_rtp_buffer_add_extension_twobytes_header(&rtp_buffer, 0, 1, pointMilisec, sizeof(millis));
+            cerr << "milisec: " << millis << '\n';
         }
         else {
             cerr << "RTP buffer not mapped\n";
