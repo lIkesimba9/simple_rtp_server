@@ -178,13 +178,18 @@ static GstPadProbeReturn cb_add_time_to_rtp_packet(GstPad *pad, GstPadProbeInfo 
 
     if (buffer != NULL) {
         // Замеряю время. И отправляю его.
-        std::chrono::time_point<std::chrono::system_clock> now = std::chrono::system_clock::now();
-        auto duration = now.time_since_epoch();
-        auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-        gconstpointer pointMilisec = &millis;
+        struct timespec mt;
+        clock_gettime (CLOCK_REALTIME, &mt);
+        unsigned int nsec = ( unsigned int )mt.tv_nsec;
+        unsigned int sec = ( unsigned int )mt.tv_sec;
+       // cout << "mt nsec: " << mt.tv_nsec << " nsec: " << nsec << endl;
+       // cout << "mt sec: " << mt.tv_sec << " sec: " << sec << endl;
+        unsigned int time_send = ( (nsec >> 14) | (sec << 18) ) & 0x00ffffff; // 6 bit for second, max 64 sec, 24 bit for
+       // cout << time_send << '\n';
+        gconstpointer pointData = &time_send;
         if (gst_rtp_buffer_map(buffer, (GstMapFlags)GST_MAP_READWRITE, &rtp_buffer)) {
-            gst_rtp_buffer_add_extension_twobytes_header(&rtp_buffer, 0, 1, pointMilisec, sizeof(millis));
-            cerr << "milisec: " << millis << '\n';
+            gst_rtp_buffer_add_extension_onebyte_header(&rtp_buffer, 1, pointData, 3);
+            //cerr << "milisec: " << millis << '\n';
         }
         else {
             cerr << "RTP buffer not mapped\n";
